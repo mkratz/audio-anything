@@ -1,0 +1,29 @@
+[project]
+name = "audio-anything"
+version = "0.1.0"
+description = "Local-first PDF-to-audiobook pipeline"
+readme = "README.md"
+authors = [
+    { name = "Matthieu Kratz", email = "56059080+mkratz@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pymupdf4llm>=0.0.17",
+    "ollama>=0.4",
+    "kokoro>=0.9",
+    "misaki[en]>=0.9",
+    "soundfile>=0.13",
+    "numpy>=2.0",
+]
+
+[project.optional-dependencies]
+elevenlabs = ["elevenlabs>=1.0"]
+openai = ["openai>=1.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+audio-anything = "audio_anything.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.4,<0.11.0"]
+build-backend = "uv_build"
