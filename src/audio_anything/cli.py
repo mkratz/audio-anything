@@ -38,6 +38,7 @@ def main() -> None:
     )
     parser.add_argument("--ollama-host", default=None, help="Ollama server URL (default: localhost)")
     parser.add_argument("--dry-run", action="store_true", help="Extract + clean only, skip TTS")
+    parser.add_argument("--transcript", default=None, help="Skip extraction/cleaning, use existing transcript file for TTS")
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING"],
@@ -73,7 +74,7 @@ def main() -> None:
     )
 
     try:
-        run(config)
+        run(config, transcript_path=args.transcript)
     except FileNotFoundError as e:
         logging.error(str(e))
         sys.exit(1)

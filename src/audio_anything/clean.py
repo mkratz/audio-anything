@@ -201,6 +201,7 @@ def _clean_chunk(text: str, config: Config) -> str:
             "temperature": config.llm_temperature,
             "num_ctx": config.llm_num_ctx,
         },
+        think=False,
     )
     result = response.message.content
 

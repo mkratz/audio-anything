@@ -39,45 +39,53 @@ def _validate_environment(config: Config) -> None:
         log.warning("Could not connect to Ollama. Is it running?", exc_info=True)
 
 
-def run(config: Config) -> None:
+def run(config: Config, transcript_path: str | None = None) -> None:
     """Run the full PDF-to-audiobook pipeline."""
     start = time.time()
     stem = config.pdf_path.stem
     config.output_dir.mkdir(parents=True, exist_ok=True)
 
-    log.info(
-        "Profile: %s | model: %s | vision: %s | preprocessing: %s | ctx: %d | chunks: %d%s",
-        config.profile, config.ollama_model, config.vision_model or "disabled",
-        config.preprocessing, config.llm_num_ctx, config.max_chunk_chars,
-        f" | host: {config.ollama_host}" if config.ollama_host else "",
-    )
+    if transcript_path:
+        # Skip extraction/cleaning, use existing transcript
+        tp = Path(transcript_path)
+        if not tp.exists():
+            raise FileNotFoundError(f"Transcript not found: {tp}")
+        transcript = tp.read_text()
+        log.info("Using existing transcript: %s (%d chars)", tp, len(transcript))
+    else:
+        log.info(
+            "Profile: %s | model: %s | vision: %s | preprocessing: %s | ctx: %d | chunks: %d%s",
+            config.profile, config.ollama_model, config.vision_model or "disabled",
+            config.preprocessing, config.llm_num_ctx, config.max_chunk_chars,
+            f" | host: {config.ollama_host}" if config.ollama_host else "",
+        )
 
-    _validate_environment(config)
+        _validate_environment(config)
 
-    # Phase 1: Extract
-    t0 = time.time()
-    pages = extract_pages(config.pdf_path, extract_images=bool(config.vision_model))
-    log.info("Extraction: %.1fs (%d pages)", time.time() - t0, len(pages))
-
-    # Phase 1.5: Describe images
-    if config.vision_model:
+        # Phase 1: Extract
         t0 = time.time()
-        pages = describe_images(pages, config)
-        log.info("Image description: %.1fs", time.time() - t0)
+        pages = extract_pages(config.pdf_path, extract_images=bool(config.vision_model))
+        log.info("Extraction: %.1fs (%d pages)", time.time() - t0, len(pages))
 
-    # Phase 2: Clean
-    t0 = time.time()
-    transcript = clean_transcript(pages, config)
-    log.info("Cleaning: %.1fs", time.time() - t0)
+        # Phase 1.5: Describe images
+        if config.vision_model:
+            t0 = time.time()
+            pages = describe_images(pages, config)
+            log.info("Image description: %.1fs", time.time() - t0)
 
-    # Save transcript
-    transcript_path = config.output_dir / f"{stem}_transcript.md"
-    transcript_path.write_text(transcript)
-    log.info("Saved transcript to %s", transcript_path)
+        # Phase 2: Clean
+        t0 = time.time()
+        transcript = clean_transcript(pages, config)
+        log.info("Cleaning: %.1fs", time.time() - t0)
 
-    if config.dry_run:
-        log.info("Dry run complete. Transcript saved, skipping TTS.")
-        return
+        # Save transcript
+        saved_path = config.output_dir / f"{stem}_transcript.md"
+        saved_path.write_text(transcript)
+        log.info("Saved transcript to %s", saved_path)
+
+        if config.dry_run:
+            log.info("Dry run complete. Transcript saved, skipping TTS.")
+            return
 
     # Phase 3: Synthesize
     t0 = time.time()

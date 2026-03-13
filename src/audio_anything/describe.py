@@ -34,6 +34,7 @@ def _describe_image(image_bytes: bytes, config: Config) -> str:
             "temperature": 0.3,
             "num_ctx": num_ctx,
         },
+        think=False,
     )
     return response.message.content.strip()
 

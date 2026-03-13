@@ -5,15 +5,15 @@ from pathlib import Path
 
 PROFILES = {
     "home": {
-        "ollama_model": "qwen2.5:7b-instruct-q4_K_M",
-        "vision_model": "minicpm-v",
+        "ollama_model": "qwen3.5:9b",
+        "vision_model": "qwen3.5:9b",
         "preprocessing": True,
         "max_chunk_chars": 6_000,
         "llm_num_ctx": 8192,
     },
     "gpu": {
-        "ollama_model": "qwen2.5:32b-instruct-q4_K_M",
-        "vision_model": "qwen2.5-vl:32b",
+        "ollama_model": "qwen3.5:27b",
+        "vision_model": "qwen3.5:27b",
         "preprocessing": False,
         "max_chunk_chars": 12_000,
         "llm_num_ctx": 32768,
