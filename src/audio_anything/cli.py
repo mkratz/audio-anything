@@ -17,9 +17,15 @@ def main() -> None:
     parser.add_argument("-o", "--output-dir", default="./output", help="Output directory (default: ./output)")
     parser.add_argument(
         "-t", "--tts-backend",
-        choices=["kokoro", "elevenlabs", "openai"],
+        choices=["kokoro", "orpheus", "elevenlabs", "openai"],
         default="kokoro",
         help="TTS backend (default: kokoro)",
+    )
+    parser.add_argument(
+        "-f", "--output-format",
+        choices=["m4b", "mp3"],
+        default="m4b",
+        help="Output audio format (default: m4b)",
     )
     parser.add_argument("-v", "--voice", default=None, help="Voice name/ID for chosen backend")
     parser.add_argument(
@@ -62,6 +68,7 @@ def main() -> None:
     config = Config(
         pdf_path=args.pdf_path,
         output_dir=args.output_dir,
+        output_format=args.output_format,
         tts_backend=args.tts_backend,
         voice=args.voice,
         profile=args.profile,

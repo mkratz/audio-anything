@@ -10,6 +10,9 @@ def get_tts_backend(config: Config) -> TTSBackend:
         case "kokoro":
             from .kokoro import KokoroBackend
             return KokoroBackend(config)
+        case "orpheus":
+            from .orpheus import OrpheusBackend
+            return OrpheusBackend(config)
         case "elevenlabs":
             from .elevenlabs import ElevenLabsBackend
             return ElevenLabsBackend(config)

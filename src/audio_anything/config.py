@@ -29,6 +29,7 @@ class Config:
     voice: str | None = None
     ollama_model: str | None = None
     vision_model: str | None = None
+    output_format: str = "m4b"
     dry_run: bool = False
     log_level: str = "INFO"
 
@@ -80,6 +81,7 @@ class Config:
     def _default_voice(self) -> str:
         defaults = {
             "kokoro": "af_heart",
+            "orpheus": "tara",
             "elevenlabs": "Rachel",
             "openai": "nova",
         }

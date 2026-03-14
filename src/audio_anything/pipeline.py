@@ -4,7 +4,7 @@ import logging
 import time
 from pathlib import Path
 
-from .audio import export_mp3, synthesize_audio
+from .audio import export_m4b, export_mp3, synthesize_audio
 from .clean import clean_transcript
 from .config import Config
 from .describe import describe_images
@@ -90,8 +90,8 @@ def run(config: Config, transcript_path: str | None = None) -> None:
     # Phase 3: Synthesize
     t0 = time.time()
     backend = get_tts_backend(config)
-    audio = synthesize_audio(transcript, backend, config)
-    log.info("Synthesis: %.1fs", time.time() - t0)
+    audio, chapters = synthesize_audio(transcript, backend, config)
+    log.info("Synthesis: %.1fs (%d chapters detected)", time.time() - t0, len(chapters))
 
     if len(audio) == 0:
         log.error("No audio produced, skipping export")
@@ -100,8 +100,11 @@ def run(config: Config, transcript_path: str | None = None) -> None:
     # Phase 4: Export
     t0 = time.time()
     output_path = config.output_dir / stem
-    mp3_path = export_mp3(audio, output_path, config)
+    if config.output_format == "m4b":
+        out_file = export_m4b(audio, output_path, config, chapters)
+    else:
+        out_file = export_mp3(audio, output_path, config)
     log.info("Export: %.1fs", time.time() - t0)
 
     total = time.time() - start
-    log.info("Pipeline complete in %.1fs → %s", total, mp3_path)
+    log.info("Pipeline complete in %.1fs → %s", total, out_file)
