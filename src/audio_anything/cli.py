@@ -44,6 +44,7 @@ def main() -> None:
     )
     parser.add_argument("--ollama-host", default=None, help="Ollama server URL (default: localhost)")
     parser.add_argument("--dry-run", action="store_true", help="Extract + clean only, skip TTS")
+    parser.add_argument("--estimate", action="store_true", help="Show estimated duration/segments and exit (no LLM or TTS)")
     parser.add_argument("--transcript", default=None, help="Skip extraction/cleaning, use existing transcript file for TTS")
     parser.add_argument(
         "--log-level",
@@ -77,6 +78,7 @@ def main() -> None:
         preprocessing=args.preprocessing,
         ollama_host=args.ollama_host,
         dry_run=args.dry_run,
+        estimate=args.estimate,
         log_level=args.log_level,
     )
 

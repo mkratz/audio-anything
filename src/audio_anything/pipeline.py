@@ -8,6 +8,7 @@ from .audio import export_m4b, export_mp3, synthesize_audio
 from .clean import clean_transcript
 from .config import Config
 from .describe import describe_images
+from .estimate import estimate_stats, print_estimate
 from .extract import extract_pages
 from .tts import get_tts_backend
 
@@ -66,6 +67,15 @@ def run(config: Config, transcript_path: str | None = None) -> None:
         t0 = time.time()
         pages = extract_pages(config.pdf_path, extract_images=bool(config.vision_model))
         log.info("Extraction: %.1fs (%d pages)", time.time() - t0, len(pages))
+
+        if config.estimate:
+            raw_text = "\n\n".join(p.text for p in pages)
+            if config.preprocessing:
+                from .clean import _preprocess
+                raw_text = "\n\n".join(_preprocess(p.text) for p in pages)
+            stats = estimate_stats(raw_text, config.segment_max_chars)
+            print_estimate(stats, config.pdf_path.name)
+            return
 
         # Phase 1.5: Describe images
         if config.vision_model:

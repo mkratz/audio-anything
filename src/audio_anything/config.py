@@ -31,6 +31,7 @@ class Config:
     vision_model: str | None = None
     output_format: str = "m4b"
     dry_run: bool = False
+    estimate: bool = False
     log_level: str = "INFO"
 
     # Profile
