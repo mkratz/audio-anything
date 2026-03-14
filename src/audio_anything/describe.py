@@ -3,6 +3,8 @@
 import base64
 import logging
 
+from tqdm import tqdm
+
 from .config import Config
 from .extract import PageChunk
 
@@ -49,23 +51,18 @@ def describe_images(pages: list[PageChunk], config: Config) -> list[PageChunk]:
         return pages
 
     log.info("Describing %d images via %s", total_images, config.vision_model)
-    img_num = 0
 
-    for page in pages:
-        if not page.images:
-            continue
+    page_image_pairs = [
+        (page, img)
+        for page in pages
+        for img in page.images
+    ]
 
-        descriptions: list[str] = []
-        for img in page.images:
-            img_num += 1
-            log.info("Describing image %d/%d (page %d)", img_num, total_images, page.page_number)
-            try:
-                desc = _describe_image(img.image_bytes, config)
-                descriptions.append(f"Image description: {desc}")
-            except Exception:
-                log.warning("Failed to describe image on page %d, skipping", page.page_number, exc_info=True)
-
-        if descriptions:
-            page.text = page.text.rstrip() + "\n\n" + "\n\n".join(descriptions)
+    for page, img in tqdm(page_image_pairs, desc="Describing images", unit="img"):
+        try:
+            desc = _describe_image(img.image_bytes, config)
+            page.text = page.text.rstrip() + f"\n\nImage description: {desc}"
+        except Exception:
+            log.warning("Failed to describe image on page %d, skipping", page.page_number, exc_info=True)
 
     return pages

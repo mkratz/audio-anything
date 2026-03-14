@@ -3,6 +3,8 @@
 import logging
 import re
 
+from tqdm import tqdm
+
 from .config import Config
 from .extract import PageChunk
 
@@ -339,7 +341,7 @@ def clean_transcript(pages: list[PageChunk], config: Config) -> str:
 
     cleaned_parts: list[str] = []
 
-    for i, chunk in enumerate(chunks, 1):
+    for i, chunk in enumerate(tqdm(chunks, desc="Cleaning", unit="chunk"), 1):
         raw_text = "\n\n".join(p.text for p in chunk)
         page_range = f"{chunk[0].page_number}-{chunk[-1].page_number}"
         log.info("Cleaning chunk %d/%d (pages %s, %d chars)", i, len(chunks), page_range, len(raw_text))

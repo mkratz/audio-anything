@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from tqdm import tqdm
+
 import numpy as np
 import soundfile as sf
 
@@ -59,7 +61,7 @@ def synthesize_audio(
     chapters: list[ChapterMarker] = []
     total_samples = 0
 
-    for i, segment in enumerate(segments, 1):
+    for i, segment in enumerate(tqdm(segments, desc="Synthesizing", unit="seg"), 1):
         if STRUCTURAL_CUE.match(segment):
             # Record chapter marker before the silence gap
             m = CHAPTER_CUE.match(segment)
