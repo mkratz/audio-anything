@@ -11,6 +11,7 @@ from tqdm import tqdm
 import numpy as np
 import soundfile as sf
 
+from .checkpoint import CheckpointManager
 from .config import Config
 from .tts.base import TTSBackend
 
@@ -51,19 +52,48 @@ def _split_into_segments(transcript: str, max_chars: int) -> list[str]:
 
 def synthesize_audio(
     transcript: str, backend: TTSBackend, config: Config,
+    ckpt: CheckpointManager | None = None,
 ) -> tuple[np.ndarray, list[ChapterMarker]]:
     """Synthesize full transcript into a single audio array with chapter markers."""
     segments = _split_into_segments(transcript, config.segment_max_chars)
     log.info("Synthesizing %d text segments via %s", len(segments), config.tts_backend)
 
     silence = np.zeros(int(config.silence_duration * config.sample_rate), dtype=np.float32)
-    audio_parts: list[np.ndarray] = []
     chapters: list[ChapterMarker] = []
+    segment_audio: list[np.ndarray | None] = [None] * len(segments)
+
+    skipped = 0
+    for i, segment in enumerate(tqdm(segments, desc="Synthesizing", unit="seg")):
+        # Check checkpoint — skip if already done
+        if ckpt and ckpt.is_segment_done(i):
+            skipped += 1
+            continue
+
+        log.info("Synthesizing segment %d/%d (%d chars)", i + 1, len(segments), len(segment))
+        try:
+            samples = backend.synthesize(segment)
+            if len(samples) > 0:
+                if ckpt:
+                    ckpt.save_segment(i, samples)
+                segment_audio[i] = samples
+            else:
+                # Save empty segment to checkpoint so we don't retry
+                if ckpt:
+                    ckpt.save_segment(i, np.array([], dtype=np.float32))
+        except Exception:
+            log.warning("TTS failed for segment %d, skipping", i + 1, exc_info=True)
+            if ckpt:
+                ckpt.save_segment(i, np.array([], dtype=np.float32))
+
+    if skipped:
+        log.info("Resumed: skipped %d already-completed segments", skipped)
+
+    # Collect all audio and compute chapter markers
+    audio_parts: list[np.ndarray] = []
     total_samples = 0
 
-    for i, segment in enumerate(tqdm(segments, desc="Synthesizing", unit="seg"), 1):
+    for i, segment in enumerate(segments):
         if STRUCTURAL_CUE.match(segment):
-            # Record chapter marker before the silence gap
             m = CHAPTER_CUE.match(segment)
             if m:
                 chapters.append(ChapterMarker(
@@ -73,14 +103,17 @@ def synthesize_audio(
             audio_parts.append(silence)
             total_samples += len(silence)
 
-        log.info("Synthesizing segment %d/%d (%d chars)", i, len(segments), len(segment))
-        try:
-            samples = backend.synthesize(segment)
-            if len(samples) > 0:
-                audio_parts.append(samples)
-                total_samples += len(samples)
-        except Exception:
-            log.warning("TTS failed for segment %d, skipping", i, exc_info=True)
+        # Load audio: from memory if just synthesized, from checkpoint if resumed
+        if segment_audio[i] is not None:
+            audio = segment_audio[i]
+        elif ckpt and ckpt.is_segment_done(i):
+            audio = ckpt.load_segment(i)
+        else:
+            audio = np.array([], dtype=np.float32)
+
+        if len(audio) > 0:
+            audio_parts.append(audio)
+            total_samples += len(audio)
 
     if not audio_parts:
         log.error("No audio produced")

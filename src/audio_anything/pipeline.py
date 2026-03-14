@@ -4,7 +4,8 @@ import logging
 import time
 from pathlib import Path
 
-from .audio import export_m4b, export_mp3, synthesize_audio
+from .audio import _split_into_segments, export_m4b, export_mp3, synthesize_audio
+from .checkpoint import CheckpointManager, transcript_hash as compute_hash
 from .clean import clean_transcript
 from .config import Config
 from .describe import describe_images
@@ -100,7 +101,17 @@ def run(config: Config, transcript_path: str | None = None) -> None:
     # Phase 3: Synthesize
     t0 = time.time()
     backend = get_tts_backend(config)
-    audio, chapters = synthesize_audio(transcript, backend, config)
+
+    # Set up checkpoint for crash recovery
+    segments = _split_into_segments(transcript, config.segment_max_chars)
+    ckpt_dir = config.output_dir / f"{stem}_checkpoint"
+    ckpt = CheckpointManager(
+        ckpt_dir,
+        transcript_hash=compute_hash(transcript),
+        total_segments=len(segments),
+    )
+
+    audio, chapters = synthesize_audio(transcript, backend, config, ckpt=ckpt)
     log.info("Synthesis: %.1fs (%d chapters detected)", time.time() - t0, len(chapters))
 
     if len(audio) == 0:
@@ -115,6 +126,9 @@ def run(config: Config, transcript_path: str | None = None) -> None:
     else:
         out_file = export_mp3(audio, output_path, config)
     log.info("Export: %.1fs", time.time() - t0)
+
+    # Clean up checkpoint after successful export
+    ckpt.cleanup()
 
     total = time.time() - start
     log.info("Pipeline complete in %.1fs → %s", total, out_file)
