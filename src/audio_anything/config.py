@@ -14,7 +14,7 @@ PROFILES = {
     "gpu": {
         "ollama_model": "qwen3.5:27b",
         "vision_model": "qwen3.5:27b",
-        "preprocessing": False,
+        "preprocessing": True,
         "max_chunk_chars": 12_000,
         "llm_num_ctx": 32768,
     },
