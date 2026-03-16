@@ -25,8 +25,9 @@ _URL_RE = re.compile(r"https?://\S+")
 # Image placeholder from pymupdf4llm
 _IMG_PLACEHOLDER_RE = re.compile(r"\*\*==>.*?<==\*\*")
 # Footer pattern: page number followed by title, or title followed by page number
+# Handles mixed case like "58 Biosecurity Victory" and ALL-CAPS
 _FOOTER_RE = re.compile(
-    r"^\s*(?:\d{1,3}\s+[A-Z][A-Z\s\-]+|[A-Z][A-Z\s\-]+\d{1,3})\s*$",
+    r"^\s*(?:\d{1,3}\s+[A-Z][A-Za-z\s\-]+|[A-Z][A-Za-z\s\-]+\s+\d{1,3})\s*$",
     re.MULTILINE,
 )
 # Generic footer: a line that is ONLY a number (page number)
@@ -44,11 +45,27 @@ _BIBLIO_RE = re.compile(
     r'^"[^"]+,"\s+.*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4},?\s*$',
     re.MULTILINE,
 )
+# Numbered endnote lines (e.g. "1. Tony Blair and William Hague, ...")
+_ENDNOTE_RE = re.compile(
+    r"^\s*\d{1,3}[\.\)]\s+\u200b?[A-Z].*(?:(?:19|20)\d{2}|doi\.org|https?://).*$",
+    re.MULTILINE,
+)
 # Markdown table artifacts like [|]
 _TABLE_ARTIFACT_RE = re.compile(r"\[\|]")
+# Repeating header lines (all-caps or title-case short lines at page tops)
+_HEADER_LINE_RE = re.compile(
+    r"^\s*(?:A PUBLICATION OF\b.*|[A-Z][A-Z\s\-&]{4,50})\s*$",
+    re.MULTILINE,
+)
 
 
-_SIDEBAR_HEADINGS = {"definitions", "glossary", "key terms", "box", "sidebar", "notes", "references"}
+_SIDEBAR_HEADINGS = {"definitions", "glossary", "key terms", "box", "sidebar", "notes"}
+
+# Headings that mark the start of back-matter to be entirely removed
+_BACKMATTER_HEADINGS = re.compile(
+    r"^(?:Chapter|Section):\s*(?:references|endnotes|bibliography|works cited|notes and references)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # Marker used to strip sidebar blocks (heading + body) in _preprocess
 _SIDEBAR_MARKER = "[@@SIDEBAR@@]"
@@ -121,6 +138,7 @@ def _preprocess(text: str) -> str:
 
     # Remove bibliographic reference lines
     text = _BIBLIO_RE.sub("", text)
+    text = _ENDNOTE_RE.sub("", text)
 
     # Remove URLs (run after markdown stripping so bare URLs are caught)
     text = _URL_RE.sub("", text)
@@ -131,6 +149,9 @@ def _preprocess(text: str) -> str:
     # Remove footers and page numbers
     text = _FOOTER_RE.sub("", text)
     text = _PAGE_NUM_RE.sub("", text)
+
+    # Remove repeating header lines (e.g. "A PUBLICATION OF THE HOOVER INSTITUTION")
+    text = _HEADER_LINE_RE.sub("", text)
 
     # Collapse excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -226,18 +247,30 @@ def _merge_chunk_boundaries(parts: list[str]) -> str:
     merged = parts[0]
     for part in parts[1:]:
         # Check if previous chunk ends mid-sentence
+        # Look past any trailing image descriptions
         prev_stripped = merged.rstrip()
         if not prev_stripped:
             merged += "\n\n" + part
             continue
 
-        last_char = prev_stripped[-1]
+        # Find last body line (skip trailing image descriptions)
+        prev_lines = prev_stripped.split("\n")
+        body_end = prev_stripped
+        for line in reversed(prev_lines):
+            line_s = line.strip()
+            if line_s and not line_s.startswith("Image description:"):
+                body_end = line_s
+                break
+
+        last_char = body_end[-1] if body_end else ""
         ends_mid_sentence = last_char not in ".!?\"'\u201d"
 
         # Check if next chunk starts with lowercase or continuation
         next_stripped = part.lstrip()
+        first_char = next_stripped[0] if next_stripped else ""
         starts_continuation = next_stripped and (
-            next_stripped[0].islower()
+            first_char.islower()
+            or first_char == "("
             or next_stripped.startswith("and ")
             or next_stripped.startswith("or ")
             or next_stripped.startswith("but ")
@@ -250,6 +283,11 @@ def _merge_chunk_boundaries(parts: list[str]) -> str:
             merged += "\n\n" + part
 
     return merged
+
+
+def _is_structural(text: str) -> bool:
+    """Check if a paragraph is a structural cue (not body text)."""
+    return text.startswith(("Chapter:", "Section:", "Image description:"))
 
 
 def _fix_mid_sentence_breaks(text: str) -> str:
@@ -265,22 +303,49 @@ def _fix_mid_sentence_breaks(text: str) -> str:
             merged.append(stripped)
             continue
 
-        prev = merged[-1]
-        last_char = prev.rstrip()[-1] if prev.rstrip() else ""
+        # Don't merge into or out of structural lines
+        if _is_structural(stripped):
+            merged.append(stripped)
+            continue
+
+        # Find the nearest preceding body paragraph (skip image descriptions)
+        body_idx = len(merged) - 1
+        while body_idx >= 0 and _is_structural(merged[body_idx]):
+            body_idx -= 1
+        if body_idx < 0:
+            merged.append(stripped)
+            continue
+
+        prev_body = merged[body_idx]
+        last_char = prev_body.rstrip()[-1] if prev_body.rstrip() else ""
         ends_mid = last_char not in ".!?\"'\u201d:)"
 
         first_word = stripped.split()[0] if stripped.split() else ""
         starts_continuation = (
             first_word[:1].islower()
+            or first_word[:1] == "("
             or first_word in ("and", "or", "but", "nor", "yet", "so", "many", "resources")
         )
 
         if ends_mid and starts_continuation:
-            merged[-1] = prev.rstrip() + " " + stripped
+            merged[body_idx] = prev_body.rstrip() + " " + stripped
         else:
             merged.append(stripped)
 
     return "\n\n".join(merged)
+
+
+def _split_body_and_images(text: str) -> tuple[str, str]:
+    """Split page text into body content and trailing image descriptions."""
+    # Find the first image description marker
+    marker = "\nImage description:"
+    pos = text.find(marker)
+    if pos == -1:
+        marker = "\n\nImage description:"
+        pos = text.find(marker)
+    if pos == -1:
+        return text, ""
+    return text[:pos].rstrip(), text[pos:]
 
 
 def _merge_page_breaks(pages: list[PageChunk]) -> list[PageChunk]:
@@ -289,12 +354,15 @@ def _merge_page_breaks(pages: list[PageChunk]) -> list[PageChunk]:
         return pages
 
     for i in range(len(pages) - 1):
-        curr_text = pages[i].text.rstrip()
+        # Separate body text from trailing image descriptions so image
+        # descriptions don't mask a mid-sentence break
+        body, trailing_imgs = _split_body_and_images(pages[i].text)
+        body = body.rstrip()
         next_text = pages[i + 1].text.lstrip()
-        if not curr_text or not next_text:
+        if not body or not next_text:
             continue
 
-        last_char = curr_text[-1]
+        last_char = body[-1]
         ends_mid = last_char not in ".!?\"'\u201d:)"
 
         first_word = next_text.split()[0] if next_text.split() else ""
@@ -314,12 +382,15 @@ def _merge_page_breaks(pages: list[PageChunk]) -> list[PageChunk]:
             if sent_end is not None:
                 continuation = next_text[:sent_end].strip()
                 remainder = next_text[sent_end:].strip()
-                pages[i].text = curr_text + " " + continuation
+                pages[i].text = body + " " + continuation + trailing_imgs
                 pages[i + 1].text = remainder
             else:
                 # Whole next page is continuation — merge entirely
-                pages[i].text = curr_text + " " + next_text
+                pages[i].text = body + " " + next_text + trailing_imgs
                 pages[i + 1].text = ""
+        elif trailing_imgs:
+            # Reassemble unchanged (body was stripped, so restore)
+            pages[i].text = body + trailing_imgs
 
     # Remove empty pages
     return [p for p in pages if p.text.strip()]
@@ -359,6 +430,7 @@ def clean_transcript(pages: list[PageChunk], config: Config) -> str:
     result = _URL_RE.sub("", result)
     result = _SOURCE_LINE_RE.sub("", result)
     result = _BIBLIO_RE.sub("", result)
+    result = _ENDNOTE_RE.sub("", result)
     # Remove any sidebar headings the LLM re-labelled
     result = re.sub(
         r"^(?:Chapter|Section):\s*(?:" + "|".join(_SIDEBAR_HEADINGS) + r")\s*$",
@@ -375,6 +447,22 @@ def clean_transcript(pages: list[PageChunk], config: Config) -> str:
             result,
             flags=re.MULTILINE | re.IGNORECASE,
         )
+
+    # Strip back-matter: everything from References/Endnotes heading onward
+    bm_match = _BACKMATTER_HEADINGS.search(result)
+    if bm_match:
+        log.info("Stripping back-matter from position %d (heading: %s)",
+                 bm_match.start(), bm_match.group().strip())
+        result = result[:bm_match.start()]
+
+    # Strip front-matter metadata lines before first Chapter/Section cue
+    first_cue = re.search(r"^(?:Chapter|Section):", result, re.MULTILINE)
+    if first_cue and first_cue.start() > 0:
+        preamble = result[:first_cue.start()]
+        # Only strip if preamble is short (< 500 chars) — likely metadata, not content
+        if len(preamble.strip()) < 500:
+            log.info("Stripping %d chars of front-matter metadata", len(preamble.strip()))
+            result = result[first_cue.start():]
 
     result = re.sub(r"\n{3,}", "\n\n", result)
 
