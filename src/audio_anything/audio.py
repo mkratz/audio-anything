@@ -18,6 +18,37 @@ from .tts.base import TTSBackend
 log = logging.getLogger(__name__)
 
 STRUCTURAL_CUE = re.compile(r"^(Chapter|Section):\s", re.MULTILINE)
+
+
+class StreamingAudioWriter:
+    """Writes audio segments incrementally to a WAV file, avoiding memory accumulation."""
+
+    def __init__(self, wav_path: Path, sample_rate: int):
+        self._path = wav_path
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = sf.SoundFile(
+            str(wav_path), mode="w", samplerate=sample_rate,
+            channels=1, subtype="FLOAT",
+        )
+        self._total_samples = 0
+
+    @property
+    def total_samples(self) -> int:
+        return self._total_samples
+
+    def write(self, audio: np.ndarray) -> None:
+        if len(audio) > 0:
+            self._file.write(audio)
+            self._total_samples += len(audio)
+
+    def close(self) -> None:
+        self._file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 CHAPTER_CUE = re.compile(r"^Chapter:\s+(.+)")
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
