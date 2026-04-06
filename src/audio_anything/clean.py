@@ -53,6 +53,14 @@ _ENDNOTE_RE = re.compile(
 )
 # Markdown table artifacts like [|]
 _TABLE_ARTIFACT_RE = re.compile(r"\[\|]")
+# Markdown table rows: 3+ consecutive lines each containing 2+ pipe characters.
+# Only stripped on pages where structured [TABLE] blocks are available.
+_MD_TABLE_RE = re.compile(
+    r"(?:^[^\n]*\|[^\n]*\|[^\n]*$\n?){3,}",
+    re.MULTILINE,
+)
+# Markdown table separator rows like |---|---|---|
+_MD_TABLE_SEP_RE = re.compile(r"^\|?[\s\-:]+\|[\s\-:|]+\|?\s*$", re.MULTILINE)
 # Repeating header lines (all-caps or title-case short lines at page tops)
 _HEADER_LINE_RE = re.compile(
     r"^\s*(?:A PUBLICATION OF\b.*|[A-Z][A-Z\s\-&]{4,50})\s*$",
@@ -97,7 +105,7 @@ def _strip_sidebar_blocks(text: str) -> str:
             continue
         if in_sidebar:
             # End sidebar at next structural cue or substantial body paragraph
-            if line.startswith(("Chapter:", "Section:", "Image description:")):
+            if line.startswith(("Chapter:", "Section:", "Image description:", "[TABLE]")):
                 in_sidebar = False
                 result_lines.append(line)
             # Skip sidebar content
@@ -130,6 +138,11 @@ def _preprocess(text: str) -> str:
 
     # Remove table artifacts
     text = _TABLE_ARTIFACT_RE.sub("", text)
+
+    # Strip markdown table rows when structured [TABLE] blocks are present
+    if "[TABLE]" in text:
+        text = _MD_TABLE_RE.sub("", text)
+        text = _MD_TABLE_SEP_RE.sub("", text)
 
     # Remove orphan markdown asterisks (not part of bold/italic pairs)
     text = re.sub(r"(?<!\*)\*(?!\*)", "", text)
@@ -170,8 +183,12 @@ Your job:
 2. Remove any remaining headers, footers, or page numbers you notice.
 3. Keep lines starting with "Chapter:", "Section:", or "Image description:" exactly as they are.
 4. Remove definition boxes, sidebars, or footnotes that interrupt the narrative flow.
-5. Preserve every body paragraph. Do not summarize or condense.
-6. Output clean plain text only. No markdown. No commentary."""
+5. When you encounter a [TABLE]...[/TABLE] block, convert it into natural spoken prose \
+that conveys the same information. Organize by rows or themes, whichever reads more \
+naturally for a listener. Remove the [TABLE] and [/TABLE] markers. If there is nearby \
+text that appears to be a garbled version of the same table, remove the garbled text.
+6. Preserve every body paragraph. Do not summarize or condense.
+7. Output clean plain text only. No markdown. No commentary."""
 
 SYSTEM_PROMPT_RAW = """\
 You are an audiobook transcript editor. You receive raw text extracted from a PDF.
@@ -187,8 +204,12 @@ Your job:
 6. Fix broken words and hyphenation artifacts from PDF line breaks.
 7. Classify major sections: output "Chapter: <title>" for chapter-level headings
    and "Section: <title>" for sub-sections. Keep "Image description:" lines as-is.
-8. Preserve every body paragraph. Do not summarize or condense.
-9. Output clean plain text only. No markdown. No commentary."""
+8. When you encounter a [TABLE]...[/TABLE] block, convert it into natural spoken prose \
+that conveys the same information. Organize by rows or themes, whichever reads more \
+naturally for a listener. Remove the [TABLE] and [/TABLE] markers. If there is nearby \
+text that appears to be a garbled version of the same table, remove the garbled text.
+9. Preserve every body paragraph. Do not summarize or condense.
+10. Output clean plain text only. No markdown. No commentary."""
 
 
 def _build_chunks(pages: list[PageChunk], max_chars: int) -> list[list[PageChunk]]:
@@ -293,6 +314,8 @@ def _postprocess_chunk(text: str) -> str:
     text = _SOURCE_LINE_RE.sub("", text)
     text = _BIBLIO_RE.sub("", text)
     text = _ENDNOTE_RE.sub("", text)
+    # Strip any [TABLE]/[/TABLE] markers the LLM failed to remove
+    text = text.replace("[TABLE]", "").replace("[/TABLE]", "")
     text = re.sub(
         r"^(?:Chapter|Section):\s*(?:" + "|".join(_SIDEBAR_HEADINGS) + r")\s*$",
         "",
@@ -352,7 +375,7 @@ def clean_and_yield(pages: list[PageChunk], config: Config):
 
 def _is_structural(text: str) -> bool:
     """Check if a paragraph is a structural cue (not body text)."""
-    return text.startswith(("Chapter:", "Section:", "Image description:"))
+    return text.startswith(("Chapter:", "Section:", "Image description:", "[TABLE]"))
 
 
 def _fix_mid_sentence_breaks(text: str) -> str:
@@ -514,6 +537,8 @@ def clean_transcript(pages: list[PageChunk], config: Config) -> str:
     result = _SOURCE_LINE_RE.sub("", result)
     result = _BIBLIO_RE.sub("", result)
     result = _ENDNOTE_RE.sub("", result)
+    # Strip any [TABLE]/[/TABLE] markers the LLM failed to remove
+    result = result.replace("[TABLE]", "").replace("[/TABLE]", "")
     # Remove any sidebar headings the LLM re-labelled
     result = re.sub(
         r"^(?:Chapter|Section):\s*(?:" + "|".join(_SIDEBAR_HEADINGS) + r")\s*$",

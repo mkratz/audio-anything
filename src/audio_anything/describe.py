@@ -12,12 +12,15 @@ from .extract import PageChunk
 log = logging.getLogger(__name__)
 
 IMAGE_PROMPT = (
-    "Briefly describe this image from a PDF for an audiobook listener who cannot see it. "
-    "Keep your description under 40 words. "
-    "For charts: state the chart type and key trend. "
-    "For photos: state the subject. "
-    "For diagrams: state what it shows. "
-    "Be factual. No preamble."
+    "Describe this image from a PDF for an audiobook listener who cannot see it.\n\n"
+    "Adapt your description length to the image type:\n"
+    "- Photo or illustration: State the subject in 1-2 sentences (under 40 words).\n"
+    "- Chart or graph: State the chart type, axes/labels, and key trend in 2-3 sentences.\n"
+    "- Diagram or flowchart: Describe all labeled elements, their relationships, and the "
+    "main takeaway in 3-5 sentences. Include all visible text labels.\n"
+    "- Infographic or multi-part visual: Describe the structure, all labeled sections, "
+    "key data points, and main message in 3-5 sentences.\n\n"
+    "Be factual and specific. Include all visible labels and text. No preamble."
 )
 
 

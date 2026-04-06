@@ -1,4 +1,4 @@
-"""PDF text extraction via PyMuPDF4LLM, with image extraction."""
+"""PDF text extraction via PyMuPDF4LLM, with image and table extraction."""
 
 import logging
 import re
@@ -23,6 +23,7 @@ class PageChunk:
     page_number: int
     text: str
     images: list[PageImage] = field(default_factory=list)
+    has_tables: bool = False
 
 
 def _extract_images(pdf_path: Path) -> dict[int, list[PageImage]]:
@@ -77,6 +78,111 @@ def _extract_images(pdf_path: Path) -> dict[int, list[PageImage]]:
     return images_by_page
 
 
+def _format_table_for_narration(cells: list[list[str | None]]) -> str:
+    """Format extracted table cells as a tagged block for LLM narrativization."""
+    rows: list[list[str]] = []
+    for row in cells:
+        clean = [(c.replace("\n", " ").strip() if c else "") for c in row]
+        if any(clean):
+            rows.append(clean)
+
+    if len(rows) < 2:
+        return ""
+
+    max_cell_len = max(len(c) for row in rows for c in row)
+    lines = ["[TABLE]"]
+
+    header = rows[0]
+    if max_cell_len > 100:
+        # Expanded format for paragraph-length cells
+        for i, row in enumerate(rows[1:], 1):
+            for j, cell in enumerate(row):
+                col_name = header[j] if j < len(header) and header[j] else f"Column {j + 1}"
+                if cell:
+                    lines.append(f"  {col_name}: {cell}")
+            lines.append("")
+    else:
+        # Compact format for short cells
+        lines.append("Header: " + " | ".join(header))
+        for row in rows[1:]:
+            lines.append("Row: " + " | ".join(row))
+
+    lines.append("[/TABLE]")
+    return "\n".join(lines)
+
+
+def _extract_tables_raw(pdf_path: str) -> dict[int, list[list[list[str | None]]]]:
+    """Extract raw table cells from each page. Runs in a subprocess to avoid
+    pymupdf4llm's side effect of corrupting find_tables() text extraction."""
+    import json
+    import subprocess
+    import sys
+
+    script = '''
+import json, sys, pymupdf
+doc = pymupdf.open(sys.argv[1])
+result = {}
+for page_idx in range(len(doc)):
+    page = doc[page_idx]
+    page_num = page_idx + 1
+    try:
+        finder = page.find_tables()
+    except Exception:
+        continue
+    if not finder.tables:
+        continue
+    page_tables = []
+    for tab in finder.tables:
+        try:
+            cells = tab.extract()
+            if len(cells) < 2:
+                continue
+            non_empty = sum(1 for row in cells for c in row if c and c.strip())
+            if non_empty < 4:
+                continue
+            page_tables.append(cells)
+        except Exception:
+            pass
+    if page_tables:
+        result[str(page_num)] = page_tables
+doc.close()
+json.dump(result, sys.stdout)
+'''
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", script, str(pdf_path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        if proc.returncode != 0:
+            log.warning("Table extraction subprocess failed: %s", proc.stderr[:200])
+            return {}
+        raw: dict[str, list] = json.loads(proc.stdout)
+        return {int(k): v for k, v in raw.items()}
+    except Exception:
+        log.warning("Table extraction subprocess error", exc_info=True)
+        return {}
+
+
+def _extract_tables(pdf_path: Path) -> dict[int, list[str]]:
+    """Extract tables from each page, formatted as [TABLE] blocks."""
+    raw_tables = _extract_tables_raw(str(pdf_path))
+    if not raw_tables:
+        return {}
+
+    tables_by_page: dict[int, list[str]] = {}
+    for page_num, page_cell_lists in raw_tables.items():
+        page_tables: list[str] = []
+        for cells in page_cell_lists:
+            formatted = _format_table_for_narration(cells)
+            if formatted:
+                page_tables.append(formatted)
+        if page_tables:
+            tables_by_page[page_num] = page_tables
+            log.debug("Page %d: extracted %d tables", page_num, len(page_tables))
+
+    return tables_by_page
+
+
 _TOC_PATTERN = re.compile(r"\*\*\d+\*\*")
 
 
@@ -90,7 +196,7 @@ def _is_toc_page(text: str) -> bool:
 
 
 def extract_pages(pdf_path: Path, extract_images: bool = False) -> list[PageChunk]:
-    """Extract markdown text (and optionally images) from each page of a PDF."""
+    """Extract markdown text (and optionally images/tables) from each page of a PDF."""
     log.info("Extracting text from %s", pdf_path)
     try:
         pages = pymupdf4llm.to_markdown(str(pdf_path), page_chunks=True)
@@ -103,6 +209,12 @@ def extract_pages(pdf_path: Path, extract_images: bool = False) -> list[PageChun
         log.info("Extracting images from %s", pdf_path)
         images_by_page = _extract_images(pdf_path)
 
+    # Extract structured tables
+    tables_by_page = _extract_tables(pdf_path)
+    table_count = sum(len(v) for v in tables_by_page.values())
+    if table_count:
+        log.info("Detected %d tables across %d pages", table_count, len(tables_by_page))
+
     chunks = []
     for page in pages:
         page_num = page.get("metadata", {}).get("page", len(chunks) + 1)
@@ -111,12 +223,22 @@ def extract_pages(pdf_path: Path, extract_images: bool = False) -> list[PageChun
             if _is_toc_page(text):
                 log.info("Skipping TOC page %d", page_num)
                 continue
+
+            # Inject structured table blocks
+            page_tables = tables_by_page.get(page_num, [])
+            if page_tables:
+                text = text.rstrip() + "\n\n" + "\n\n".join(page_tables)
+
             chunks.append(PageChunk(
                 page_number=page_num,
                 text=text,
                 images=images_by_page.get(page_num, []),
+                has_tables=bool(page_tables),
             ))
 
     img_count = sum(len(c.images) for c in chunks)
-    log.info("Extracted %d non-empty pages from %d total (%d images)", len(chunks), len(pages), img_count)
+    log.info(
+        "Extracted %d non-empty pages from %d total (%d images, %d tables)",
+        len(chunks), len(pages), img_count, table_count,
+    )
     return chunks
