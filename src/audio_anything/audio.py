@@ -122,6 +122,57 @@ def synthesize_audio(
     return np.concatenate(audio_parts), chapters
 
 
+def synthesize_audio_streaming(
+    chunk_iter,
+    backend: TTSBackend,
+    config: Config,
+    ckpt: CheckpointManager | None = None,
+) -> tuple[np.ndarray, list[ChapterMarker]]:
+    """Synthesize audio from a streaming iterable of cleaned text chunks.
+
+    Each chunk is split into segments and synthesized incrementally.
+    No checkpoint resume support in streaming mode (use sequential for resume).
+    """
+    silence = np.zeros(int(config.silence_duration * config.sample_rate), dtype=np.float32)
+    chapters: list[ChapterMarker] = []
+    audio_parts: list[np.ndarray] = []
+    total_samples = 0
+    seg_index = 0
+
+    for chunk_text in chunk_iter:
+        segments = _split_into_segments(chunk_text, config.segment_max_chars)
+
+        for segment in segments:
+            if STRUCTURAL_CUE.match(segment):
+                m = CHAPTER_CUE.match(segment)
+                if m:
+                    chapters.append(ChapterMarker(
+                        title=m.group(1).strip(),
+                        start_sample=total_samples,
+                    ))
+                audio_parts.append(silence)
+                total_samples += len(silence)
+
+            log.info("Synthesizing segment %d (%d chars)", seg_index + 1, len(segment))
+            try:
+                samples = backend.synthesize(segment)
+                if len(samples) > 0:
+                    if ckpt:
+                        ckpt.save_segment(seg_index, samples)
+                    audio_parts.append(samples)
+                    total_samples += len(samples)
+            except Exception:
+                log.warning("TTS failed for segment %d, skipping", seg_index + 1, exc_info=True)
+
+            seg_index += 1
+
+    if not audio_parts:
+        log.error("No audio produced")
+        return np.array([], dtype=np.float32), []
+
+    return np.concatenate(audio_parts), chapters
+
+
 def _write_wav(audio: np.ndarray, wav_path: Path, sample_rate: int) -> None:
     """Write audio samples to a WAV file."""
     wav_path.parent.mkdir(parents=True, exist_ok=True)

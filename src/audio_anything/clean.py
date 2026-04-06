@@ -287,6 +287,69 @@ def _merge_chunk_boundaries(parts: list[str]) -> str:
     return merged
 
 
+def _postprocess_chunk(text: str) -> str:
+    """Apply per-chunk post-processing (regex cleanup safe to run independently)."""
+    text = _URL_RE.sub("", text)
+    text = _SOURCE_LINE_RE.sub("", text)
+    text = _BIBLIO_RE.sub("", text)
+    text = _ENDNOTE_RE.sub("", text)
+    text = re.sub(
+        r"^(?:Chapter|Section):\s*(?:" + "|".join(_SIDEBAR_HEADINGS) + r")\s*$",
+        "",
+        text,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+    _major = ("preface", "introduction", "conclusion", "appendix", "acknowledgments")
+    for name in _major:
+        text = re.sub(
+            rf"^{name}\s*$",
+            f"Chapter: {name.capitalize()}",
+            text,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def clean_and_yield(pages: list[PageChunk], config: Config):
+    """Streaming variant of clean_transcript — yields cleaned text chunks.
+
+    Does NOT apply cross-chunk operations (back-matter stripping, mid-sentence
+    fix, front-matter stripping). Those require the full transcript and should
+    be handled by the consumer or applied after collection.
+    """
+    # Phase 1: Mechanical pre-processing
+    if config.preprocessing:
+        for page in pages:
+            page.text = _preprocess(page.text)
+        pages = _merge_page_breaks(pages)
+
+    chunks = _build_chunks(pages, config.max_chunk_chars)
+    log.info("Streaming clean: %d pages in %d chunks via %s", len(pages), len(chunks), config.ollama_model)
+
+    def _clean_one(i, chunk):
+        raw_text = "\n\n".join(p.text for p in chunk)
+        page_range = f"{chunk[0].page_number}-{chunk[-1].page_number}"
+        log.info("Cleaning chunk %d/%d (pages %s, %d chars)", i + 1, len(chunks), page_range, len(raw_text))
+        try:
+            return _clean_chunk(raw_text, config)
+        except Exception:
+            log.warning("LLM cleaning failed for chunk %d, using raw", i + 1, exc_info=True)
+            return raw_text
+
+    if config.ollama_parallel > 1:
+        # Submit all, yield in order (futures list preserves submission order)
+        with ThreadPoolExecutor(max_workers=config.ollama_parallel) as pool:
+            futures = [pool.submit(_clean_one, i, chunk) for i, chunk in enumerate(chunks)]
+            for future in tqdm(futures, desc="Cleaning", unit="chunk"):
+                text = future.result()  # blocks until this chunk done, preserves order
+                yield _postprocess_chunk(text)
+    else:
+        for i, chunk in enumerate(tqdm(chunks, desc="Cleaning", unit="chunk")):
+            text = _clean_one(i, chunk)
+            yield _postprocess_chunk(text)
+
+
 def _is_structural(text: str) -> bool:
     """Check if a paragraph is a structural cue (not body text)."""
     return text.startswith(("Chapter:", "Section:", "Image description:"))
