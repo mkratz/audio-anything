@@ -2,6 +2,7 @@
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tqdm import tqdm
 
@@ -411,19 +412,37 @@ def clean_transcript(pages: list[PageChunk], config: Config) -> str:
     chunks = _build_chunks(pages, config.max_chunk_chars)
     log.info("Cleaning %d pages in %d chunks via %s", len(pages), len(chunks), config.ollama_model)
 
-    cleaned_parts: list[str] = []
+    cleaned_parts: list[str] = [None] * len(chunks)
 
-    for i, chunk in enumerate(tqdm(chunks, desc="Cleaning", unit="chunk"), 1):
-        raw_text = "\n\n".join(p.text for p in chunk)
-        page_range = f"{chunk[0].page_number}-{chunk[-1].page_number}"
-        log.info("Cleaning chunk %d/%d (pages %s, %d chars)", i, len(chunks), page_range, len(raw_text))
+    if config.ollama_parallel > 1:
+        with ThreadPoolExecutor(max_workers=config.ollama_parallel) as pool:
+            futures = {}
+            for i, chunk in enumerate(chunks):
+                raw_text = "\n\n".join(p.text for p in chunk)
+                page_range = f"{chunk[0].page_number}-{chunk[-1].page_number}"
+                log.info("Submitting chunk %d/%d (pages %s, %d chars)", i + 1, len(chunks), page_range, len(raw_text))
+                futures[pool.submit(_clean_chunk, raw_text, config)] = i
 
-        try:
-            cleaned = _clean_chunk(raw_text, config)
-            cleaned_parts.append(cleaned)
-        except Exception:
-            log.warning("LLM cleaning failed for chunk %d (pages %s), using raw text", i, page_range, exc_info=True)
-            cleaned_parts.append(raw_text)
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Cleaning", unit="chunk"):
+                idx = futures[future]
+                try:
+                    cleaned_parts[idx] = future.result()
+                except Exception:
+                    chunk = chunks[idx]
+                    page_range = f"{chunk[0].page_number}-{chunk[-1].page_number}"
+                    raw_text = "\n\n".join(p.text for p in chunk)
+                    log.warning("LLM cleaning failed for chunk %d (pages %s), using raw text", idx + 1, page_range, exc_info=True)
+                    cleaned_parts[idx] = raw_text
+    else:
+        for i, chunk in enumerate(tqdm(chunks, desc="Cleaning", unit="chunk"), 0):
+            raw_text = "\n\n".join(p.text for p in chunk)
+            page_range = f"{chunk[0].page_number}-{chunk[-1].page_number}"
+            log.info("Cleaning chunk %d/%d (pages %s, %d chars)", i + 1, len(chunks), page_range, len(raw_text))
+            try:
+                cleaned_parts[i] = _clean_chunk(raw_text, config)
+            except Exception:
+                log.warning("LLM cleaning failed for chunk %d (pages %s), using raw text", i + 1, page_range, exc_info=True)
+                cleaned_parts[i] = raw_text
 
     result = "\n\n".join(cleaned_parts)
 

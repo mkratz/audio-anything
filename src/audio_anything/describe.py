@@ -2,6 +2,7 @@
 
 import base64
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tqdm import tqdm
 
@@ -59,11 +60,25 @@ def describe_images(pages: list[PageChunk], config: Config) -> list[PageChunk]:
         for img in page.images
     ]
 
-    for page, img in tqdm(page_image_pairs, desc="Describing images", unit="img"):
-        try:
-            desc = _describe_image(img.image_bytes, config)
-            page.text = page.text.rstrip() + f"\n\nImage description: {desc}"
-        except Exception:
-            log.warning("Failed to describe image on page %d, skipping", page.page_number, exc_info=True)
+    if config.ollama_parallel > 1:
+        with ThreadPoolExecutor(max_workers=config.ollama_parallel) as pool:
+            futures = {}
+            for page, img in page_image_pairs:
+                futures[pool.submit(_describe_image, img.image_bytes, config)] = (page, img)
+
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Describing images", unit="img"):
+                page, img = futures[future]
+                try:
+                    desc = future.result()
+                    page.text = page.text.rstrip() + f"\n\nImage description: {desc}"
+                except Exception:
+                    log.warning("Failed to describe image on page %d, skipping", page.page_number, exc_info=True)
+    else:
+        for page, img in tqdm(page_image_pairs, desc="Describing images", unit="img"):
+            try:
+                desc = _describe_image(img.image_bytes, config)
+                page.text = page.text.rstrip() + f"\n\nImage description: {desc}"
+            except Exception:
+                log.warning("Failed to describe image on page %d, skipping", page.page_number, exc_info=True)
 
     return pages
