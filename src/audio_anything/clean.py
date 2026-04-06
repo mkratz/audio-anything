@@ -225,6 +225,7 @@ def _clean_chunk(text: str, config: Config) -> str:
             "num_ctx": config.llm_num_ctx,
         },
         think=False,
+        keep_alive="30m",
     )
     result = response.message.content
 

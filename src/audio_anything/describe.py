@@ -37,6 +37,7 @@ def _describe_image(image_bytes: bytes, config: Config) -> str:
             "num_ctx": num_ctx,
         },
         think=False,
+        keep_alive="30m",
     )
     return response.message.content.strip()
 
