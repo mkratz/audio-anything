@@ -109,9 +109,11 @@ def run(config: Config, transcript_path: str | None = None) -> None:
         ckpt_dir,
         transcript_hash=compute_hash(transcript),
         total_segments=len(segments),
+        batch_interval=10,
     )
 
     audio, chapters = synthesize_audio(transcript, backend, config, ckpt=ckpt)
+    ckpt.flush()
     log.info("Synthesis: %.1fs (%d chapters detected)", time.time() - t0, len(chapters))
 
     if len(audio) == 0:

@@ -61,3 +61,45 @@ def test_cleanup_removes_directory(ckpt_dir):
 
     mgr.cleanup()
     assert not ckpt_dir.exists()
+
+
+def test_batch_writes_reduces_manifest_updates(ckpt_dir):
+    """With batch_interval=5, manifest is only written every 5th segment."""
+    mgr = CheckpointManager(ckpt_dir, transcript_hash="abc123", total_segments=10, batch_interval=5)
+    manifest_path = ckpt_dir / "checkpoint.json"
+
+    for i in range(4):
+        mgr.save_segment(i, np.zeros(10, dtype=np.float32))
+
+    # After 4 segments, in-memory state should be correct
+    assert mgr.completed_count == 4
+    assert mgr.is_segment_done(3)
+
+    # Read manifest from disk — should lag behind in-memory state
+    disk_manifest = json.loads(manifest_path.read_text())
+    assert disk_manifest["completed"] == 0  # not yet flushed
+
+    # 5th segment triggers a write
+    mgr.save_segment(4, np.zeros(10, dtype=np.float32))
+    disk_manifest = json.loads(manifest_path.read_text())
+    assert disk_manifest["completed"] == 5
+
+
+def test_flush_writes_final_manifest(ckpt_dir):
+    """flush() writes manifest regardless of batch interval."""
+    mgr = CheckpointManager(ckpt_dir, transcript_hash="abc123", total_segments=10, batch_interval=100)
+    mgr.save_segment(0, np.zeros(10, dtype=np.float32))
+    mgr.save_segment(1, np.zeros(10, dtype=np.float32))
+    mgr.flush()
+
+    disk_manifest = json.loads((ckpt_dir / "checkpoint.json").read_text())
+    assert disk_manifest["completed"] == 2
+
+
+def test_default_batch_interval_writes_every_segment(ckpt_dir):
+    """Default batch_interval=1 preserves existing behavior."""
+    mgr = CheckpointManager(ckpt_dir, transcript_hash="abc123", total_segments=3)
+    mgr.save_segment(0, np.zeros(10, dtype=np.float32))
+
+    disk_manifest = json.loads((ckpt_dir / "checkpoint.json").read_text())
+    assert disk_manifest["completed"] == 1

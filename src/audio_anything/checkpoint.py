@@ -24,11 +24,12 @@ def transcript_hash(text: str) -> str:
 class CheckpointManager:
     """Manages segment-level checkpointing for TTS synthesis."""
 
-    def __init__(self, ckpt_dir: Path, transcript_hash: str, total_segments: int):
+    def __init__(self, ckpt_dir: Path, transcript_hash: str, total_segments: int, batch_interval: int = 1):
         self._dir = ckpt_dir
         self._manifest_path = ckpt_dir / "checkpoint.json"
         self._hash = transcript_hash
         self._total = total_segments
+        self._batch_interval = batch_interval
 
         if self._manifest_path.exists():
             manifest = json.loads(self._manifest_path.read_text())
@@ -62,6 +63,11 @@ class CheckpointManager:
         """Save a single segment's audio to disk."""
         np.save(str(self._seg_path(index)), audio)
         self._completed.add(index)
+        if self._batch_interval <= 1 or len(self._completed) % self._batch_interval == 0:
+            self._write_manifest()
+
+    def flush(self) -> None:
+        """Force-write the manifest to disk (call after synthesis loop)."""
         self._write_manifest()
 
     def load_segment(self, index: int) -> np.ndarray:
