@@ -49,8 +49,11 @@ class Config:
     # Audio
     sample_rate: int = 24_000
     silence_duration: float = 0.75
-    segment_max_chars: int = 500
+    segment_max_chars: int = 1500
     mp3_bitrate: str = "192k"
+
+    # Concurrency
+    ollama_parallel: int = 2
 
     # Internal
     _ollama_client: object = field(default=None, repr=False)

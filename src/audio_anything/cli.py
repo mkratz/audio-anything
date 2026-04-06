@@ -43,6 +43,8 @@ def main() -> None:
         help="Force enable/disable mechanical preprocessing (overrides profile default)",
     )
     parser.add_argument("--ollama-host", default=None, help="Ollama server URL (default: localhost)")
+    parser.add_argument("--ollama-parallel", type=int, default=None, help="Number of concurrent Ollama requests (default: 2)")
+    parser.add_argument("--segment-max-chars", type=int, default=None, help="Max chars per TTS segment (default: 1500)")
     parser.add_argument("--dry-run", action="store_true", help="Extract + clean only, skip TTS")
     parser.add_argument("--estimate", action="store_true", help="Show estimated duration/segments and exit (no LLM or TTS)")
     parser.add_argument("--transcript", default=None, help="Skip extraction/cleaning, use existing transcript file for TTS")
@@ -113,6 +115,8 @@ def main() -> None:
             estimate=args.estimate,
             dry_run=args.dry_run,
             log_level=args.log_level,
+            **({"ollama_parallel": args.ollama_parallel} if args.ollama_parallel is not None else {}),
+            **({"segment_max_chars": args.segment_max_chars} if args.segment_max_chars is not None else {}),
         )
 
         try:
